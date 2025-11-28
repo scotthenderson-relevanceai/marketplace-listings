@@ -3,18 +3,15 @@
 const MARKETPLACE_BASE =
   "https://prod.marketplace.tryrelevance.com/public/listings";
 
-// Basic HTML escaping to avoid breaking the email if there are special chars
-function escapeHtml(str = "") {
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+// Optional: shorten very long descriptions so emails don't blow out
+function truncate(str = "", max = 260) {
+  const s = String(str);
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + "…";
 }
 
 module.exports = async (req, res) => {
-  // We only expect POST from Intercom / your automation
+  // Only allow POST (as used by Intercom Data Connector / automation)
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Method not allowed" });
@@ -25,16 +22,16 @@ module.exports = async (req, res) => {
     const body =
       typeof req.body === "string" ? JSON.parse(req.body) : (req.body || {});
     const user = body.user || {};
-    // At the moment we don't personalise by user, but we keep this for future use
+    // Reserved for future personalisation
     void user;
 
-    // Build query to get TOP 5 LATEST listings
+    // Build query to get the 4 latest agent listings
     const url = new URL(MARKETPLACE_BASE);
-    url.searchParams.set("entityType", "agent");     // change to "workforce" if needed
-    url.searchParams.set("orderBy", "created_at");   // latest first
+    url.searchParams.set("entityType", "agent");      // change to "workforce" if you want those instead
+    url.searchParams.set("orderBy", "created_at");    // latest first
     url.searchParams.set("orderDirection", "desc");
     url.searchParams.set("page", "1");
-    url.searchParams.set("pageSize", "5");
+    url.searchParams.set("pageSize", "4");
 
     const resp = await fetch(url.toString(), {
       method: "GET",
@@ -49,46 +46,40 @@ module.exports = async (req, res) => {
 
     const data = await resp.json();
     const results = (data && data.results) || [];
+    const [l1, l2, l3, l4] = results;
 
-    // Build HTML snippet (email-safe table layout)
-    let html =
-      '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">';
+    const toUrl = (l) =>
+      l && l.display_id
+        ? `https://marketplace.tryrelevance.com/listings/${l.display_id}`
+        : "";
 
-    for (const listing of results) {
-      if (!listing) continue;
+    const payload = {
+      // Listing 1
+      listing_1_name: l1?.name || "",
+      listing_1_desc: truncate(l1?.description),
+      listing_1_url: toUrl(l1),
+      listing_1_image: l1?.image || "",
 
-      const name = escapeHtml(listing.name || "");
-      const desc = escapeHtml(listing.description || "");
-      const image = listing.image || "";
-      const displayId = listing.display_id || "";
-      const listingUrl = displayId
-        ? `https://marketplace.tryrelevance.com/listings/${displayId}`
-        : "#";
+      // Listing 2
+      listing_2_name: l2?.name || "",
+      listing_2_desc: truncate(l2?.description),
+      listing_2_url: toUrl(l2),
+      listing_2_image: l2?.image || "",
 
-      html += `
-        <tr>
-          <td width="80" valign="top" style="padding:8px 0;">
-            ${
-              image
-                ? `<img src="${image}" alt="${name}" width="80" style="border-radius:8px; display:block;">`
-                : ""
-            }
-          </td>
-          <td valign="top" style="padding:8px 12px;">
-            <strong style="font-size:14px; line-height:1.3;">${name}</strong><br>
-            <span style="font-size:13px; line-height:1.4; color:#555555;">${desc}</span><br>
-            <a href="${listingUrl}" style="font-size:13px; color:#3366ff;">View template →</a>
-          </td>
-        </tr>
-      `;
-    }
+      // Listing 3
+      listing_3_name: l3?.name || "",
+      listing_3_desc: truncate(l3?.description),
+      listing_3_url: toUrl(l3),
+      listing_3_image: l3?.image || "",
 
-    html += "</table>";
+      // Listing 4
+      listing_4_name: l4?.name || "",
+      listing_4_desc: truncate(l4?.description),
+      listing_4_url: toUrl(l4),
+      listing_4_image: l4?.image || ""
+    };
 
-    // Return as a single field for Intercom to map to a user attribute
-    return res.status(200).json({
-      listings_html: html
-    });
+    return res.status(200).json(payload);
   } catch (err) {
     console.error("Server error in fetch-listings:", err);
     return res
