@@ -1,36 +1,40 @@
+// api/fetch-listings.js
+
 const MARKETPLACE_BASE =
   "https://prod.marketplace.tryrelevance.com/public/listings";
 
+// Basic HTML escaping to avoid breaking the email if there are special chars
+function escapeHtml(str = "") {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 module.exports = async (req, res) => {
-  // Only allow POST from Intercom
+  // We only expect POST from Intercom / your automation
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
-    // Defensive parse in case body is a string
+    // Parse body defensively (Intercom sends JSON)
     const body =
       typeof req.body === "string" ? JSON.parse(req.body) : (req.body || {});
     const user = body.user || {};
-    const email = user.email || null;
-    const company = user.company || null;
+    // At the moment we don't personalise by user, but we keep this for future use
+    void user;
 
-    // Build Marketplace query
+    // Build query to get TOP 5 LATEST listings
     const url = new URL(MARKETPLACE_BASE);
-    url.searchParams.set("entityType", "agent");        // or "workforce"
-    url.searchParams.set("orderBy", "clone_count");     // tweak as needed
+    url.searchParams.set("entityType", "agent");     // change to "workforce" if needed
+    url.searchParams.set("orderBy", "created_at");   // latest first
     url.searchParams.set("orderDirection", "desc");
     url.searchParams.set("page", "1");
-    url.searchParams.set("pageSize", "3");
-
-    // Optional: personalise if your API supports tags etc.
-    // if (company) {
-    //   url.searchParams.set("tag", company.toLowerCase());
-    // } else if (email && email.includes("@")) {
-    //   const domain = email.split("@")[1];
-    //   url.searchParams.set("tag", domain.split(".")[0]);
-    // }
+    url.searchParams.set("pageSize", "5");
 
     const resp = await fetch(url.toString(), {
       method: "GET",
@@ -45,31 +49,46 @@ module.exports = async (req, res) => {
 
     const data = await resp.json();
     const results = (data && data.results) || [];
-    const [l1, l2, l3] = results;
 
-    const listingUrl = (l) =>
-      l && l.display_id
-        ? `https://marketplace.tryrelevance.com/listings/${l.display_id}`
-        : "";
+    // Build HTML snippet (email-safe table layout)
+    let html =
+      '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">';
 
-    const payload = {
-      listing_1_name: l1?.name || "",
-      listing_1_desc: l1?.description || "",
-      listing_1_url: listingUrl(l1),
-      listing_1_image: l1?.image || "",
+    for (const listing of results) {
+      if (!listing) continue;
 
-      listing_2_name: l2?.name || "",
-      listing_2_desc: l2?.description || "",
-      listing_2_url: listingUrl(l2),
-      listing_2_image: l2?.image || "",
+      const name = escapeHtml(listing.name || "");
+      const desc = escapeHtml(listing.description || "");
+      const image = listing.image || "";
+      const displayId = listing.display_id || "";
+      const listingUrl = displayId
+        ? `https://marketplace.tryrelevance.com/listings/${displayId}`
+        : "#";
 
-      listing_3_name: l3?.name || "",
-      listing_3_desc: l3?.description || "",
-      listing_3_url: listingUrl(l3),
-      listing_3_image: l3?.image || ""
-    };
+      html += `
+        <tr>
+          <td width="80" valign="top" style="padding:8px 0;">
+            ${
+              image
+                ? `<img src="${image}" alt="${name}" width="80" style="border-radius:8px; display:block;">`
+                : ""
+            }
+          </td>
+          <td valign="top" style="padding:8px 12px;">
+            <strong style="font-size:14px; line-height:1.3;">${name}</strong><br>
+            <span style="font-size:13px; line-height:1.4; color:#555555;">${desc}</span><br>
+            <a href="${listingUrl}" style="font-size:13px; color:#3366ff;">View template →</a>
+          </td>
+        </tr>
+      `;
+    }
 
-    return res.status(200).json(payload);
+    html += "</table>";
+
+    // Return as a single field for Intercom to map to a user attribute
+    return res.status(200).json({
+      listings_html: html
+    });
   } catch (err) {
     console.error("Server error in fetch-listings:", err);
     return res
@@ -77,4 +96,3 @@ module.exports = async (req, res) => {
       .json({ error: "Internal server error in fetch-listings" });
   }
 };
-
